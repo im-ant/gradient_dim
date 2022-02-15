@@ -1,0 +1,24 @@
+defaults:
+  - _self_  # defaults will be overwritten by below configs
+hydra:
+  run:
+    dir: /scratch/agc9824/project_outputs/gradient_dim/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: ${hydra.run.dir} # multirun output dir
+    subdir: ${hydra.job.num}
+
+device: 'cpu'
+
+dataset:
+  parent_dir: '/scratch/agc9824/datasets'
+
+train:
+  batch_size: 64
+  epochs: 3
+
+logging:
+  log_per_num_batch: 100
+
+model:  # TODO move this to an individual config directory
+  _target_: models.simple_nets.KoehlerNet
+  _recursive_: False  # do not recursively instantiate
