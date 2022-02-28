@@ -8,6 +8,7 @@ hydra:
     subdir: ${hydra.job.num}
 
 device: 'cpu'
+seed: 2
 
 dataset:
   parent_dir: '/scratch/agc9824/datasets'
@@ -18,7 +19,15 @@ train:
 
 logging:
   log_per_num_batch: 100
+  save_per_num_step: 100  # save model weights and gradients per n SGD steps
 
 model:  # TODO move this to an individual config directory
   _target_: models.simple_nets.KoehlerNet
   _recursive_: False  # do not recursively instantiate
+
+optimizer:  # so far just works for Adam
+  kwargs:
+    lr: 1e-3
+    weight_decay: 0
+    amsgrad: False
+

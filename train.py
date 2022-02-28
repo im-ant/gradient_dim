@@ -14,6 +14,7 @@ import torchvision
 from torchvision import datasets
 
 from logger import Logger
+import utils
 
 
 class Workspace:
@@ -22,91 +23,103 @@ class Workspace:
         print(f'workspace: {self.work_dir}')
 
         # ==
-        # Set up
+        # Set up attributes
         self.cfg = cfg
-        # utils.set_seed_everywhere(cfg.seed)  # TODO implement this
+        utils.set_seed_everywhere(cfg.seed)
         self.device = torch.device(cfg.device)
 
         # Logging
+        self.timer = utils.Timer()
         self.logger = Logger(self.work_dir, use_tb=False, sort_header=False)
 
-    def evaluate(self):
-        pass
-
-    def train(self):
-        print(self.device)  # TODO delete
-
+        # =====
+        # Initialization
         vision_transform = torchvision.transforms.Compose([
             torchvision.transforms.ToTensor(),
             torchvision.transforms.Normalize((0.1307,), (0.3081,))
         ])
 
-        train_data = datasets.MNIST(
+        self.train_data = datasets.MNIST(
             root=self.cfg.dataset.parent_dir,
             train=True,
             transform=vision_transform,
             download=True,
         )
-        test_data = datasets.MNIST(
+        self.test_data = datasets.MNIST(
             root=self.cfg.dataset.parent_dir,
             train=False,
             transform=vision_transform
         )
 
-        train_loader = torch.utils.data.DataLoader(train_data,
-                                                   batch_size=self.cfg.train.batch_size,
-                                                   shuffle=True)
+        # Initialize data loader and model
+        self.train_loader = torch.utils.data.DataLoader(self.train_data,
+                                                        batch_size=self.cfg.train.batch_size,
+                                                        shuffle=True)
 
-        # TODO delete this blob
-        examples = enumerate(train_loader)
-        batch_idx, (example_data, example_targets) = next(examples)
-        print(example_data.shape)  #
+        self.model = hydra.utils.instantiate(self.cfg.model)
+        self.model.to(self.device)
+        print(self.model)
 
-        # Actual training below, TODO move above to initialization
-        model = hydra.utils.instantiate(self.cfg.model)
-        model.to(self.device)
-        print(model)
+        self.optimizer = optim.Adam(self.model.parameters(), **self.cfg.optimizer.kwargs)
+        self.criterion = nn.CrossEntropyLoss()
 
-        optimizer = optim.Adam(model.parameters(), lr=1e-3)  # TODO improve this
-        criterion = nn.CrossEntropyLoss()
+    def evaluate(self):
+        pass
 
+    def train(self):
         global_step = 0
         self.logger.log('train/step', 0, global_step)
         for epoch in range(1, self.cfg.train.epochs + 1):
+            model, optimizer, criterion = self.model, self.optimizer, self.criterion
             model.train()
+
             epoch_num_batch = 0
             epoch_examples = 0
-            for batch_idx, (inputs, target) in enumerate(train_loader):
+            epoch_num_correct = 0
+            fps_logging_steps = 0
+
+            for batch_idx, (inputs, target) in enumerate(self.train_loader):
                 inputs, target = inputs.to(self.device), target.to(self.device)
 
                 optimizer.zero_grad()
-                output = model(inputs)
+                output = model(inputs)  # size (mini-batch size, k classes)
                 loss = criterion(output, target)
                 loss.backward()
                 optimizer.step()
+
+                # Compute number correct for accuracy
+                pred_label = output.max(axis=1).indices
+                batch_n_correct = (pred_label == target).float().sum()
+                epoch_num_correct += batch_n_correct
 
                 #
                 global_step += 1
                 epoch_num_batch += 1
                 epoch_examples += len(inputs)
+                fps_logging_steps += 1
 
                 self.logger.log('train/loss', loss.item(), global_step)
 
                 # Log
                 if epoch_num_batch % self.cfg.logging.log_per_num_batch == 0:
-                    # TODO: add timer
+                    # TODO: compute eval accuracy?
+
+                    elapsed_time, total_time = self.timer.reset()
+                    cur_log_fps = fps_logging_steps / elapsed_time
+                    fps_logging_steps = 0
+
                     with self.logger.log_and_dump_ctx(global_step,
                                                       ty='train') as log:
                         log('step', global_step)
                         log('epoch', epoch)
                         log('batch_num', epoch_num_batch)
                         log('examples', epoch_examples)
-                        # log('fps', episode_step / elapsed_time)
-                        # log('total_time', total_time)
-                        # log('step', self._global_step)
+                        log('accuracy', epoch_num_correct / epoch_examples)
+                        log('fps', cur_log_fps)
+                        log('total_time', total_time)
 
                 # Save
-                if epoch_num_batch % 2 == 0:  # TODO: make into config
+                if epoch_num_batch % int(self.cfg.logging.save_per_num_step) == 0:
                     cur_param_dict = {}
                     cur_grad_dict = {}
                     for name, param in model.named_parameters():
